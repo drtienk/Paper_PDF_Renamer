@@ -24,16 +24,28 @@ if (typeof window !== "undefined") {
   pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
 }
 
-const cleanDoi = (value: string): string => value.replace(/[\s<>]/g, "").replace(/[).,;]+$/, "");
+const cleanDoi = (value: string): string =>
+  value
+    .replace(/^https?:\/\/(dx\.)?doi\.org\//i, "")
+    .replace(/\s+/g, "")
+    .replace(/[<>"']/g, "")
+    .replace(/[).,;]+$/, "");
 
 const sanitizeFilename = (value: string): string =>
   value
+    .normalize("NFKD")
+    .replace(/[\u0000-\u001f\u007f]/g, "")
     .replace(/[\\/:*?"<>|]/g, "")
     .replace(/\s+/g, " ")
     .trim();
 
 const truncate = (value: string, maxLength: number): string =>
   value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
+
+const safeSegment = (value: string, fallback: string): string => {
+  const cleaned = sanitizeFilename(value);
+  return cleaned.length > 0 ? cleaned : fallback;
+};
 
 async function extractTextFromPdf(file: File): Promise<string> {
   const data = await file.arrayBuffer();
@@ -43,9 +55,7 @@ async function extractTextFromPdf(file: File): Promise<string> {
   for (let pageNo = 1; pageNo <= pdf.numPages; pageNo += 1) {
     const page = await pdf.getPage(pageNo);
     const textContent = await page.getTextContent();
-    const pageText = textContent.items
-      .map((item) => ("str" in item ? item.str : ""))
-      .join(" ");
+    const pageText = textContent.items.map((item) => ("str" in item ? item.str : "")).join(" ");
     chunks.push(pageText);
   }
 
@@ -54,7 +64,7 @@ async function extractTextFromPdf(file: File): Promise<string> {
 
 const findDois = (text: string): string[] => {
   const matches = text.match(DOI_REGEX) ?? [];
-  return [...new Set(matches.map(cleanDoi))];
+  return [...new Set(matches.map(cleanDoi).filter(Boolean))];
 };
 
 const getYear = (work: CrossrefWork): string => {
@@ -99,13 +109,30 @@ export default function Home() {
   const filename = useMemo(() => {
     if (!metadata || !selectedDoi) return "";
 
-    const year = sanitizeFilename(getYear(metadata));
-    const author = sanitizeFilename(getFirstAuthor(metadata));
-    const shortTitle = sanitizeFilename(getShortTitle(metadata));
-    const normalizedDoi = sanitizeFilename(selectedDoi.replace(/\//g, "_"));
+    const year = safeSegment(getYear(metadata), "UnknownYear");
+    const author = safeSegment(getFirstAuthor(metadata), "UnknownAuthor");
+    const shortTitle = safeSegment(getShortTitle(metadata), "Untitled");
+    const normalizedDoi = safeSegment(selectedDoi.replace(/\//g, "_"), "UnknownDOI");
     const base = `${year} - ${author} - ${shortTitle} - ${normalizedDoi}`;
     return `${truncate(base, MAX_FILENAME_LENGTH)}.pdf`;
   }, [metadata, selectedDoi]);
+
+  const lookupDoi = async (doi: string) => {
+    setSelectedDoi(doi);
+    setMetadata(null);
+    setLoading(true);
+    setStatus("正在查詢 Crossref...");
+
+    try {
+      const work = await fetchCrossref(doi);
+      setMetadata(work);
+      setStatus("已取得 metadata，可下載新檔名 PDF。");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "查詢 Crossref 失敗");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const onUpload = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -125,44 +152,24 @@ export default function Home() {
       setAllDois(dois);
 
       if (dois.length === 0) {
-        setStatus("找不到 DOI，請手動輸入。");
+        setStatus("找不到 DOI，請手動輸入。\n(找不到 DOI)");
         return;
       }
 
-      setSelectedDoi(dois[0]);
-      setStatus(`找到 ${dois.length} 個 DOI，正在查詢 Crossref...`);
-      const work = await fetchCrossref(dois[0]);
-      setMetadata(work);
-      setStatus("已取得 metadata，可下載新檔名 PDF。");
+      await lookupDoi(dois[0]);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "處理 PDF 時發生錯誤");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const onChooseDoi = async (doi: string) => {
-    setSelectedDoi(doi);
-    setMetadata(null);
-    setLoading(true);
-    setStatus("正在查詢 Crossref...");
-    try {
-      const work = await fetchCrossref(doi);
-      setMetadata(work);
-      setStatus("已取得 metadata，可下載新檔名 PDF。");
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "查詢 Crossref 失敗");
-    } finally {
       setLoading(false);
     }
   };
 
   const onManualLookup = async () => {
     const doi = cleanDoi(manualDoi);
-    if (!doi) return;
-
-    setSelectedDoi(doi);
-    await onChooseDoi(doi);
+    if (!doi) {
+      setStatus("請先輸入有效 DOI。");
+      return;
+    }
+    await lookupDoi(doi);
   };
 
   const onDownload = async () => {
@@ -183,19 +190,15 @@ export default function Home() {
       <h1>Paper PDF Renamer</h1>
       <p className="subtitle">上傳 PDF → 偵測 DOI → 查 Crossref → 下載新檔名</p>
 
-      <label className="uploadButton" htmlFor="pdfUpload">
+      <label className="uploadButton" htmlFor="pdfUpload" aria-disabled={loading}>
         上傳 PDF
       </label>
-      <input id="pdfUpload" type="file" accept="application/pdf" onChange={onUpload} />
+      <input id="pdfUpload" type="file" accept="application/pdf" onChange={onUpload} disabled={loading} />
 
       {allDois.length > 1 && (
         <div className="field">
           <label htmlFor="doiSelect">偵測到多個 DOI：</label>
-          <select
-            id="doiSelect"
-            value={selectedDoi}
-            onChange={(event) => void onChooseDoi(event.target.value)}
-          >
+          <select id="doiSelect" value={selectedDoi} onChange={(event) => void lookupDoi(event.target.value)}>
             {allDois.map((doi) => (
               <option key={doi} value={doi}>
                 {doi}
@@ -211,6 +214,7 @@ export default function Home() {
           placeholder="手動輸入 DOI"
           value={manualDoi}
           onChange={(event) => setManualDoi(event.target.value)}
+          disabled={loading}
         />
         <button type="button" onClick={() => void onManualLookup()} disabled={loading}>
           用手動 DOI 查詢
