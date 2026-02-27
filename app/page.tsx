@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useMemo, useState } from "react";
+import { ChangeEvent, DragEvent, useMemo, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 
 type CrossrefAuthor = {
@@ -17,10 +17,69 @@ type CrossrefWork = {
   DOI?: string;
 };
 
+type Lang = "en" | "zh";
+
+const TEXT = {
+  en: {
+    title: "Paper PDF Renamer",
+    subtitle: "Upload PDF → Detect DOI → Fetch Metadata → Download Renamed File",
+    upload: "Upload PDF",
+    dropHere: "Drag & drop a PDF here, or click to select",
+    multiDoi: "Multiple DOIs detected:",
+    manualPlaceholder: "Enter DOI manually",
+    manualLookup: "Lookup DOI",
+    metadata: "Metadata",
+    metadataTitle: "Title:",
+    metadataAuthor: "Author:",
+    metadataYear: "Year:",
+    metadataJournal: "Journal:",
+    metadataDoi: "DOI:",
+    notAvailable: "N/A",
+    statusUpload: "Please upload a PDF.",
+    statusParsing: "Parsing PDF text...",
+    statusNoDoi: "No DOI found. Please enter it manually.",
+    statusInvalidDoi: "Please enter a valid DOI.",
+    statusFetching: "Fetching metadata from Crossref...",
+    statusSuccess: "Metadata retrieved. You can download the renamed PDF.",
+    statusErrorLookup: "Crossref lookup failed.",
+    statusErrorPdf: "Error processing PDF.",
+    download: "Download",
+    newFilename: "New filename:",
+    toggleEn: "EN",
+    toggleZh: "中文",
+  },
+  zh: {
+    title: "Paper PDF Renamer",
+    subtitle: "上傳 PDF → 偵測 DOI → 查 Crossref → 下載新檔名",
+    upload: "上傳 PDF",
+    dropHere: "拖拉 PDF 到這裡，或點擊選擇檔案",
+    multiDoi: "偵測到多個 DOI：",
+    manualPlaceholder: "手動輸入 DOI",
+    manualLookup: "查詢 DOI",
+    metadata: "Metadata",
+    metadataTitle: "Title:",
+    metadataAuthor: "Author:",
+    metadataYear: "Year:",
+    metadataJournal: "Journal:",
+    metadataDoi: "DOI:",
+    notAvailable: "N/A",
+    statusUpload: "請上傳 PDF。",
+    statusParsing: "正在解析 PDF 文字...",
+    statusNoDoi: "找不到 DOI，請手動輸入。",
+    statusInvalidDoi: "請先輸入有效 DOI。",
+    statusFetching: "正在查詢 Crossref...",
+    statusSuccess: "已取得 metadata，可下載新檔名 PDF。",
+    statusErrorLookup: "查詢 Crossref 失敗。",
+    statusErrorPdf: "處理 PDF 時發生錯誤。",
+    download: "下載",
+    newFilename: "新檔名：",
+    toggleEn: "EN",
+    toggleZh: "中文",
+  },
+} satisfies Record<Lang, Record<string, string>>;
+
 const DOI_REGEX = /10\.\d{4,9}\/[\w.()/:;-]+/gi;
 const MAX_FILENAME_LENGTH = 180;
-
-// Filename rules requested
 const MAX_SHORT_TITLE_LENGTH = 60;
 const MAX_JOURNAL_ABBR_LENGTH = 40;
 const JOURNAL_STOP_WORDS = new Set(["of", "and", "the", "in"]);
@@ -45,7 +104,7 @@ const sanitizeFilename = (value: string): string =>
     .trim();
 
 const truncate = (value: string, maxLength: number): string =>
-  value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
+  value.length > maxLength ? value.slice(0, maxLength) : value;
 
 const safeSegment = (value: string, fallback: string): string => {
   const cleaned = sanitizeFilename(value);
@@ -120,15 +179,18 @@ async function fetchCrossref(doi: string): Promise<CrossrefWork> {
 }
 
 export default function Home() {
+  const [lang, setLang] = useState<Lang>("en");
+  const t = TEXT[lang];
+
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [allDois, setAllDois] = useState<string[]>([]);
   const [selectedDoi, setSelectedDoi] = useState<string>("");
   const [manualDoi, setManualDoi] = useState<string>("");
   const [metadata, setMetadata] = useState<CrossrefWork | null>(null);
-  const [status, setStatus] = useState<string>("請上傳 PDF。");
+  const [status, setStatus] = useState<string>(TEXT.en.statusUpload);
   const [loading, setLoading] = useState<boolean>(false);
+  const [isDragOver, setIsDragOver] = useState<boolean>(false);
 
-  // Filename: {year} - {firstAuthor} - {shortTitle} - {journalAbbr}.pdf (NO DOI)
   const filename = useMemo(() => {
     if (!metadata) return "";
 
@@ -136,7 +198,6 @@ export default function Home() {
     const author = safeSegment(getFirstAuthor(metadata), "UnknownAuthor");
     const shortTitle = safeSegment(getShortTitle(metadata), "Untitled");
     const journalAbbr = safeSegment(getJournalAbbr(metadata), "UnknownJournal");
-
     const base = `${year} - ${author} - ${shortTitle} - ${journalAbbr}`;
     return `${truncate(base, MAX_FILENAME_LENGTH)}.pdf`;
   }, [metadata]);
@@ -145,30 +206,27 @@ export default function Home() {
     setSelectedDoi(doi);
     setMetadata(null);
     setLoading(true);
-    setStatus("正在查詢 Crossref...");
+    setStatus(t.statusFetching);
 
     try {
       const work = await fetchCrossref(doi);
       setMetadata(work);
-      setStatus("已取得 metadata，可下載新檔名 PDF。");
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "查詢 Crossref 失敗");
+      setStatus(t.statusSuccess);
+    } catch {
+      setStatus(t.statusErrorLookup);
     } finally {
       setLoading(false);
     }
   };
 
-  const onUpload = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
+  const handleFile = async (file: File) => {
     setPdfFile(file);
     setMetadata(null);
     setAllDois([]);
     setSelectedDoi("");
     setManualDoi("");
     setLoading(true);
-    setStatus("正在解析 PDF 文字...");
+    setStatus(t.statusParsing);
 
     try {
       const text = await extractTextFromPdf(file);
@@ -176,21 +234,44 @@ export default function Home() {
       setAllDois(dois);
 
       if (dois.length === 0) {
-        setStatus("找不到 DOI，請手動輸入。\n(找不到 DOI)");
+        setStatus(t.statusNoDoi);
+        setLoading(false);
         return;
       }
 
       await lookupDoi(dois[0]);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "處理 PDF 時發生錯誤");
+    } catch {
+      setStatus(t.statusErrorPdf);
       setLoading(false);
     }
+  };
+
+  const onUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    await handleFile(file);
+  };
+
+  const onDrop = async (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragOver(false);
+
+    const file = event.dataTransfer.files?.[0];
+    if (!file) return;
+
+    const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+    if (!isPdf) {
+      setStatus(t.statusErrorPdf);
+      return;
+    }
+
+    await handleFile(file);
   };
 
   const onManualLookup = async () => {
     const doi = cleanDoi(manualDoi);
     if (!doi) {
-      setStatus("請先輸入有效 DOI。");
+      setStatus(t.statusInvalidDoi);
       return;
     }
     await lookupDoi(doi);
@@ -211,17 +292,40 @@ export default function Home() {
 
   return (
     <main className="container">
-      <h1>Paper PDF Renamer</h1>
-      <p className="subtitle">上傳 PDF → 偵測 DOI → 查 Crossref → 下載新檔名</p>
+      <div className="langToggle">
+        <button type="button" onClick={() => setLang("en")} disabled={lang === "en"}>
+          {t.toggleEn}
+        </button>
+        <button type="button" onClick={() => setLang("zh")} disabled={lang === "zh"}>
+          {t.toggleZh}
+        </button>
+      </div>
 
-      <label className="uploadButton" htmlFor="pdfUpload" aria-disabled={loading}>
-        上傳 PDF
-      </label>
-      <input id="pdfUpload" type="file" accept="application/pdf" onChange={onUpload} disabled={loading} />
+      <h1>{t.title}</h1>
+      <p className="subtitle">{t.subtitle}</p>
+
+      <div
+        className={`dropZone${isDragOver ? " dragOver" : ""}`}
+        onDragOver={(event) => {
+          event.preventDefault();
+          setIsDragOver(true);
+        }}
+        onDragLeave={(event) => {
+          event.preventDefault();
+          setIsDragOver(false);
+        }}
+        onDrop={(event) => void onDrop(event)}
+      >
+        <p>{t.dropHere}</p>
+        <label className="uploadButton" htmlFor="pdfUpload" aria-disabled={loading}>
+          {t.upload}
+        </label>
+        <input id="pdfUpload" type="file" accept="application/pdf" onChange={onUpload} disabled={loading} />
+      </div>
 
       {allDois.length > 1 && (
         <div className="field">
-          <label htmlFor="doiSelect">偵測到多個 DOI：</label>
+          <label htmlFor="doiSelect">{t.multiDoi}</label>
           <select id="doiSelect" value={selectedDoi} onChange={(event) => void lookupDoi(event.target.value)}>
             {allDois.map((doi) => (
               <option key={doi} value={doi}>
@@ -235,34 +339,34 @@ export default function Home() {
       <div className="field inline">
         <input
           type="text"
-          placeholder="手動輸入 DOI"
+          placeholder={t.manualPlaceholder}
           value={manualDoi}
           onChange={(event) => setManualDoi(event.target.value)}
           disabled={loading}
         />
         <button type="button" onClick={() => void onManualLookup()} disabled={loading}>
-          用手動 DOI 查詢
+          {t.manualLookup}
         </button>
       </div>
 
       {metadata && (
         <section className="metadata">
-          <h2>Metadata</h2>
+          <h2>{t.metadata}</h2>
           <ul>
             <li>
-              <strong>Title:</strong> {metadata.title?.[0] ?? "N/A"}
+              <strong>{t.metadataTitle}</strong> {metadata.title?.[0] ?? t.notAvailable}
             </li>
             <li>
-              <strong>Author:</strong> {metadata.author?.map((a) => a.family ?? a.name).join(", ") ?? "N/A"}
+              <strong>{t.metadataAuthor}</strong> {metadata.author?.map((a) => a.family ?? a.name).join(", ") ?? t.notAvailable}
             </li>
             <li>
-              <strong>Year:</strong> {getYear(metadata)}
+              <strong>{t.metadataYear}</strong> {getYear(metadata)}
             </li>
             <li>
-              <strong>Journal:</strong> {metadata["container-title"]?.[0] ?? "N/A"}
+              <strong>{t.metadataJournal}</strong> {metadata["container-title"]?.[0] ?? t.notAvailable}
             </li>
             <li>
-              <strong>DOI:</strong> {selectedDoi}
+              <strong>{t.metadataDoi}</strong> {selectedDoi}
             </li>
           </ul>
         </section>
@@ -271,10 +375,14 @@ export default function Home() {
       <p className="status">{status}</p>
 
       <button type="button" onClick={() => void onDownload()} disabled={!filename || loading}>
-        Download
+        {t.download}
       </button>
 
-      {filename && <p className="filename">新檔名：{filename}</p>}
+      {filename && (
+        <p className="filename">
+          {t.newFilename} {filename}
+        </p>
+      )}
     </main>
   );
 }

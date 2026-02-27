@@ -99,3 +99,30 @@ input[type="text"] {
   color: #101828;
   font-weight: 600;
 }
+
+.langToggle {
+  text-align: right;
+}
+
+.langToggle button + button {
+  margin-left: 8px;
+}
+
+.dropZone {
+  margin: 16px 0;
+  padding: 16px;
+  border: 2px dashed #d0d5dd;
+  border-radius: 12px;
+  text-align: center;
+  background: #f8fafc;
+}
+
+.dropZone.dragOver {
+  border-color: #0f62fe;
+  background: #eef4ff;
+}
+
+.dropZone p {
+  margin: 0 0 12px;
+  color: #475467;
+}
