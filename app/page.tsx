@@ -19,9 +19,6 @@ type CrossrefWork = {
 
 const DOI_REGEX = /10\.\d{4,9}\/[\w.()/:;-]+/gi;
 const MAX_FILENAME_LENGTH = 180;
-const MAX_SHORT_TITLE_LENGTH = 60;
-const MAX_JOURNAL_ABBR_LENGTH = 40;
-const JOURNAL_STOP_WORDS = new Set(["of", "and", "the", "in"]);
 
 if (typeof window !== "undefined") {
   pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
@@ -43,7 +40,7 @@ const sanitizeFilename = (value: string): string =>
     .trim();
 
 const truncate = (value: string, maxLength: number): string =>
-  value.length > maxLength ? value.slice(0, maxLength) : value;
+  value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
 
 const safeSegment = (value: string, fallback: string): string => {
   const cleaned = sanitizeFilename(value);
@@ -82,29 +79,8 @@ const getFirstAuthor = (work: CrossrefWork): string => {
 };
 
 const getShortTitle = (work: CrossrefWork): string => {
-  const title = sanitizeFilename(work.title?.[0] ?? "Untitled");
-  if (title.length <= MAX_SHORT_TITLE_LENGTH) {
-    return title;
-  }
-
-  return `${title.slice(0, MAX_SHORT_TITLE_LENGTH)}-`;
-};
-
-const getJournalAbbr = (work: CrossrefWork): string => {
-  const journal = sanitizeFilename(work["container-title"]?.[0] ?? "");
-  if (!journal) {
-    return "UnknownJournal";
-  }
-
-  const abbr = journal
-    .split(/\s+/)
-    .map((word) => word.trim())
-    .filter((word) => word.length > 0)
-    .filter((word) => !JOURNAL_STOP_WORDS.has(word.toLowerCase()))
-    .map((word) => word[0]?.toUpperCase() ?? "")
-    .join("");
-
-  return truncate(abbr || "UnknownJournal", MAX_JOURNAL_ABBR_LENGTH);
+  const title = work.title?.[0] ?? "Untitled";
+  return truncate(title, 60);
 };
 
 async function fetchCrossref(doi: string): Promise<CrossrefWork> {
@@ -131,15 +107,15 @@ export default function Home() {
   const [loading, setLoading] = useState<boolean>(false);
 
   const filename = useMemo(() => {
-    if (!metadata) return "";
+    if (!metadata || !selectedDoi) return "";
 
     const year = safeSegment(getYear(metadata), "UnknownYear");
     const author = safeSegment(getFirstAuthor(metadata), "UnknownAuthor");
     const shortTitle = safeSegment(getShortTitle(metadata), "Untitled");
-    const journalAbbr = safeSegment(getJournalAbbr(metadata), "UnknownJournal");
-    const base = `${year} - ${author} - ${shortTitle} - ${journalAbbr}`;
+    const normalizedDoi = safeSegment(selectedDoi.replace(/\//g, "_"), "UnknownDOI");
+    const base = `${year} - ${author} - ${shortTitle} - ${normalizedDoi}`;
     return `${truncate(base, MAX_FILENAME_LENGTH)}.pdf`;
-  }, [metadata]);
+  }, [metadata, selectedDoi]);
 
   const lookupDoi = async (doi: string) => {
     setSelectedDoi(doi);
