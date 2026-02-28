@@ -1,6 +1,7 @@
+```tsx
 "use client";
 
-import { ChangeEvent, DragEvent, useMemo, useState } from "react";
+import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 
 type CrossrefAuthor = {
@@ -19,13 +20,7 @@ type CrossrefWork = {
 
 type Lang = "en" | "zh";
 
-type JobStatus =
-  | "queued"
-  | "extracting"
-  | "detecting"
-  | "fetching"
-  | "ready"
-  | "failed";
+type JobStatus = "queued" | "extracting" | "detecting" | "fetching" | "ready" | "failed";
 
 type PdfJob = {
   id: string;
@@ -164,18 +159,13 @@ const getFirstAuthor = (work: CrossrefWork): string => {
 
 const getShortTitle = (work: CrossrefWork): string => {
   const title = sanitizeFilename(work.title?.[0] ?? "Untitled");
-  if (title.length <= MAX_SHORT_TITLE_LENGTH) {
-    return title;
-  }
-
+  if (title.length <= MAX_SHORT_TITLE_LENGTH) return title;
   return `${title.slice(0, MAX_SHORT_TITLE_LENGTH)}-`;
 };
 
 const getJournalAbbr = (work: CrossrefWork): string => {
   const journal = sanitizeFilename(work["container-title"]?.[0] ?? "");
-  if (!journal) {
-    return "UnknownJournal";
-  }
+  if (!journal) return "UnknownJournal";
 
   const abbr = journal
     .split(/\s+/)
@@ -190,14 +180,10 @@ const getJournalAbbr = (work: CrossrefWork): string => {
 
 async function fetchCrossref(doi: string): Promise<CrossrefWork> {
   const response = await fetch(`https://api.crossref.org/works/${encodeURIComponent(doi)}`);
-  if (!response.ok) {
-    throw new Error(`Crossref request failed (${response.status})`);
-  }
+  if (!response.ok) throw new Error(`Crossref request failed (${response.status})`);
 
   const payload = (await response.json()) as { message?: CrossrefWork };
-  if (!payload.message) {
-    throw new Error("Crossref response missing metadata");
-  }
+  if (!payload.message) throw new Error("Crossref response missing metadata");
 
   return payload.message;
 }
@@ -205,8 +191,13 @@ async function fetchCrossref(doi: string): Promise<CrossrefWork> {
 export default function Home() {
   const [lang, setLang] = useState<Lang>("en");
   const [jobs, setJobs] = useState<PdfJob[]>([]);
+  const jobsRef = useRef<PdfJob[]>([]);
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
   const t = TEXT[lang];
+
+  useEffect(() => {
+    jobsRef.current = jobs;
+  }, [jobs]);
 
   const lookupDoi = async (doi: string) => fetchCrossref(doi);
 
@@ -241,13 +232,11 @@ export default function Home() {
       const base = `${year} - ${author} - ${shortTitle} - ${journalAbbr}`;
       return `${truncate(base, MAX_FILENAME_LENGTH)}.pdf`;
     }
-
     return getFallbackName(job.file.name);
   };
 
   const resolveAllFilenames = (nextJobs: PdfJob[]): PdfJob[] => {
     const used = new Set<string>();
-
     return nextJobs.map((job) => {
       const candidate = computeCandidateName(job);
       const resolvedFilename = withCollisionSuffix(candidate, used);
@@ -259,58 +248,59 @@ export default function Home() {
     setJobs((prev) => resolveAllFilenames(mutator(prev)));
   }
 
-  const getJob = (jobId: string): PdfJob | undefined => jobs.find((job) => job.id === jobId);
+  const getJobLatest = (jobId: string): PdfJob | undefined =>
+    jobsRef.current.find((job) => job.id === jobId);
 
   const processJob = async (jobId: string) => {
-    const start = getJob(jobId);
+    const start = getJobLatest(jobId);
     if (!start) return;
+
     const file = start.file;
+    const manualTrim = (start.manualDoi ?? "").trim();
+    const selectedTrim = (start.selectedDoi ?? "").trim();
 
     updateJobs((prev) =>
       prev.map((job) =>
-        job.id === jobId
-          ? { ...job, status: "extracting", error: undefined, metadata: undefined }
-          : job,
+        job.id === jobId ? { ...job, status: "extracting", error: undefined, metadata: undefined } : job,
       ),
     );
 
     try {
       const text = await extractTextFromPdf(file);
 
-      updateJobs((prev) => prev.map((job) => (job.id === jobId ? { ...job, status: "detecting" } : job)));
+      updateJobs((prev) =>
+        prev.map((job) => (job.id === jobId ? { ...job, status: "detecting" } : job)),
+      );
 
       const detected = findDois(text);
 
-      let doiToLookup = "";
-      let manualHasInput = false;
-      let manualInvalid = false;
+      const selectedCandidate =
+        selectedTrim.length > 0 ? selectedTrim : (detected[0] ?? "");
 
+      const doiToLookup = manualTrim.length > 0 ? cleanDoi(manualTrim) : selectedCandidate;
+
+      // Always persist detection results (so dropdown shows what we found)
       updateJobs((prev) =>
-        prev.map((job) => {
-          if (job.id !== jobId) return job;
-
-          const manualTrim = (job.manualDoi ?? "").trim();
-          manualHasInput = manualTrim.length > 0;
-          const selected =
-            job.selectedDoi && job.selectedDoi.trim().length > 0
-              ? job.selectedDoi
-              : (detected[0] ?? "");
-
-          doiToLookup = manualTrim ? cleanDoi(manualTrim) : selected;
-          manualInvalid = manualHasInput && doiToLookup.trim().length === 0;
-
-          return {
-            ...job,
-            dois: detected,
-            selectedDoi: selected,
-          };
-        }),
+        prev.map((job) =>
+          job.id === jobId
+            ? { ...job, dois: detected, selectedDoi: selectedCandidate || job.selectedDoi }
+            : job,
+        ),
       );
 
-      if (detected.length === 0) {
+      if (detected.length === 0 && manualTrim.length === 0) {
         updateJobs((prev) =>
           prev.map((job) =>
-            job.id === jobId ? { ...job, status: "failed", error: "No DOI found", metadata: undefined } : job,
+            job.id === jobId ? { ...job, status: "failed", error: t.noDoiFound, metadata: undefined } : job,
+          ),
+        );
+        return;
+      }
+
+      if (manualTrim.length > 0 && (!doiToLookup || doiToLookup.trim().length === 0)) {
+        updateJobs((prev) =>
+          prev.map((job) =>
+            job.id === jobId ? { ...job, status: "failed", error: t.invalidDoi, metadata: undefined } : job,
           ),
         );
         return;
@@ -318,32 +308,23 @@ export default function Home() {
 
       if (!doiToLookup || doiToLookup.trim().length === 0) {
         updateJobs((prev) =>
-          prev.map((job) => (job.id === jobId ? { ...job, status: "failed", error: "No DOI found" } : job)),
+          prev.map((job) =>
+            job.id === jobId ? { ...job, status: "failed", error: t.noDoiFound, metadata: undefined } : job,
+          ),
         );
         return;
       }
 
-      if (manualInvalid) {
-        updateJobs((prev) =>
-          prev.map((job) => (job.id === jobId ? { ...job, status: "failed", error: "Invalid DOI" } : job)),
-        );
-        return;
-      }
-
-      updateJobs((prev) => prev.map((job) => (job.id === jobId ? { ...job, status: "fetching" } : job)));
+      updateJobs((prev) =>
+        prev.map((job) => (job.id === jobId ? { ...job, status: "fetching" } : job)),
+      );
 
       try {
         const work = await lookupDoi(doiToLookup);
         updateJobs((prev) =>
           prev.map((job) =>
             job.id === jobId
-              ? {
-                  ...job,
-                  metadata: work,
-                  selectedDoi: doiToLookup,
-                  status: "ready",
-                  error: undefined,
-                }
+              ? { ...job, metadata: work, selectedDoi: doiToLookup, status: "ready", error: undefined }
               : job,
           ),
         );
@@ -363,14 +344,17 @@ export default function Home() {
       }
     } catch {
       updateJobs((prev) =>
-        prev.map((job) => (job.id === jobId ? { ...job, status: "failed", error: "Error processing PDF" } : job)),
+        prev.map((job) =>
+          job.id === jobId ? { ...job, status: "failed", error: "Error processing PDF" } : job,
+        ),
       );
     }
   };
 
   const processAll = async () => {
-    const ids = jobs.map((j) => j.id);
+    const ids = jobsRef.current.map((j) => j.id);
     for (const id of ids) {
+      // sequential, no parallel
       await processJob(id);
     }
   };
@@ -391,7 +375,7 @@ export default function Home() {
   };
 
   const downloadAll = async () => {
-    for (const job of jobs) {
+    for (const job of jobsRef.current) {
       await downloadJob(job);
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
@@ -403,7 +387,6 @@ export default function Home() {
     const items = Array.from(files).filter(
       (file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"),
     );
-
     if (items.length === 0) return;
 
     updateJobs((prev) => [
@@ -503,11 +486,21 @@ export default function Home() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
             <thead>
               <tr>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>{t.fileName}</th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>{t.status}</th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>{t.doi}</th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>{t.resolvedFilename}</th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>{t.actions}</th>
+                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>
+                  {t.fileName}
+                </th>
+                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>
+                  {t.status}
+                </th>
+                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>
+                  {t.doi}
+                </th>
+                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>
+                  {t.resolvedFilename}
+                </th>
+                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>
+                  {t.actions}
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -568,9 +561,7 @@ export default function Home() {
                       </button>
                       <button
                         type="button"
-                        onClick={() =>
-                          updateJobs((prev) => prev.filter((item) => item.id !== job.id))
-                        }
+                        onClick={() => updateJobs((prev) => prev.filter((item) => item.id !== job.id))}
                       >
                         {t.remove}
                       </button>
@@ -585,3 +576,4 @@ export default function Home() {
     </main>
   );
 }
+
