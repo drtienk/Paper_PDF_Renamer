@@ -262,8 +262,9 @@ export default function Home() {
   const getJob = (jobId: string): PdfJob | undefined => jobs.find((job) => job.id === jobId);
 
   const processJob = async (jobId: string) => {
-    const startJob = getJob(jobId);
-    if (!startJob) return;
+    const start = getJob(jobId);
+    if (!start) return;
+    const file = start.file;
 
     updateJobs((prev) =>
       prev.map((job) =>
@@ -274,24 +275,36 @@ export default function Home() {
     );
 
     try {
-      const current = getJob(jobId);
-      if (!current) return;
-      const text = await extractTextFromPdf(current.file);
+      const text = await extractTextFromPdf(file);
 
       updateJobs((prev) => prev.map((job) => (job.id === jobId ? { ...job, status: "detecting" } : job)));
 
       const detected = findDois(text);
 
+      let doiToLookup = "";
+      let manualHasInput = false;
+      let manualInvalid = false;
+
       updateJobs((prev) =>
-        prev.map((job) =>
-          job.id === jobId
-            ? {
-                ...job,
-                dois: detected,
-                selectedDoi: job.selectedDoi ?? detected[0],
-              }
-            : job,
-        ),
+        prev.map((job) => {
+          if (job.id !== jobId) return job;
+
+          const manualTrim = (job.manualDoi ?? "").trim();
+          manualHasInput = manualTrim.length > 0;
+          const selected =
+            job.selectedDoi && job.selectedDoi.trim().length > 0
+              ? job.selectedDoi
+              : (detected[0] ?? "");
+
+          doiToLookup = manualTrim ? cleanDoi(manualTrim) : selected;
+          manualInvalid = manualHasInput && doiToLookup.trim().length === 0;
+
+          return {
+            ...job,
+            dois: detected,
+            selectedDoi: selected,
+          };
+        }),
       );
 
       if (detected.length === 0) {
@@ -303,24 +316,16 @@ export default function Home() {
         return;
       }
 
-      const selected = getJob(jobId);
-      if (!selected) return;
-
-      let doiToLookup: string | undefined;
-      if ((selected.manualDoi ?? "").trim().length > 0) {
-        const cleaned = cleanDoi(selected.manualDoi!.trim());
-        if (!cleaned) {
-          updateJobs((prev) =>
-            prev.map((job) => (job.id === jobId ? { ...job, status: "failed", error: "Invalid DOI" } : job)),
-          );
-          return;
-        }
-        doiToLookup = cleaned;
-      } else if (selected.selectedDoi) {
-        doiToLookup = selected.selectedDoi;
-      } else {
+      if (!doiToLookup || doiToLookup.trim().length === 0) {
         updateJobs((prev) =>
           prev.map((job) => (job.id === jobId ? { ...job, status: "failed", error: "No DOI found" } : job)),
+        );
+        return;
+      }
+
+      if (manualInvalid) {
+        updateJobs((prev) =>
+          prev.map((job) => (job.id === jobId ? { ...job, status: "failed", error: "Invalid DOI" } : job)),
         );
         return;
       }
