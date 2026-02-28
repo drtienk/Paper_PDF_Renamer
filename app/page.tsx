@@ -19,62 +19,82 @@ type CrossrefWork = {
 
 type Lang = "en" | "zh";
 
+type JobStatus =
+  | "queued"
+  | "extracting"
+  | "detecting"
+  | "fetching"
+  | "ready"
+  | "failed";
+
+type PdfJob = {
+  id: string;
+  file: File;
+  status: JobStatus;
+  dois: string[];
+  selectedDoi?: string;
+  manualDoi?: string;
+  metadata?: CrossrefWork;
+  error?: string;
+  resolvedFilename?: string;
+};
+
 const TEXT = {
   en: {
     title: "Paper PDF Renamer",
     subtitle: "Upload PDF → Detect DOI → Fetch Metadata → Download Renamed File",
     upload: "Upload PDF",
-    dropHere: "Drag & drop a PDF here, or click to select",
-    multiDoi: "Multiple DOIs detected:",
-    manualPlaceholder: "Enter DOI manually",
-    manualLookup: "Lookup DOI",
-    metadata: "Metadata",
-    metadataTitle: "Title:",
-    metadataAuthor: "Author:",
-    metadataYear: "Year:",
-    metadataJournal: "Journal:",
-    metadataDoi: "DOI:",
-    notAvailable: "N/A",
-    statusUpload: "Please upload a PDF.",
-    statusParsing: "Parsing PDF text...",
-    statusNoDoi: "No DOI found. Please enter it manually.",
-    statusInvalidDoi: "Please enter a valid DOI.",
-    statusFetching: "Fetching metadata from Crossref...",
-    statusSuccess: "Metadata retrieved. You can download the renamed PDF.",
-    statusErrorLookup: "Crossref lookup failed.",
-    statusErrorPdf: "Error processing PDF.",
+    dropHere: "Drag & drop PDF files here, or click to select",
+    processAll: "Process All",
+    downloadAll: "Download All",
+    clear: "Clear",
+    fileName: "File name",
+    status: "Status",
+    doi: "DOI",
+    resolvedFilename: "Resolved filename",
+    actions: "Actions",
+    process: "Process",
+    retry: "Fetch/Retry",
     download: "Download",
-    newFilename: "New filename:",
-    toggleEn: "EN",
-    toggleZh: "中文",
+    remove: "Remove",
+    noJobs: "No files added yet.",
+    manualPlaceholder: "Enter DOI manually",
+    invalidDoi: "Invalid DOI",
+    noDoiFound: "No DOI found",
+    statusQueued: "Queued",
+    statusExtracting: "Extracting",
+    statusDetecting: "Detecting",
+    statusFetching: "Fetching",
+    statusReady: "Ready",
+    statusFailed: "Failed",
   },
   zh: {
     title: "Paper PDF Renamer",
     subtitle: "上傳 PDF → 偵測 DOI → 查 Crossref → 下載新檔名",
     upload: "上傳 PDF",
     dropHere: "拖拉 PDF 到這裡，或點擊選擇檔案",
-    multiDoi: "偵測到多個 DOI：",
-    manualPlaceholder: "手動輸入 DOI",
-    manualLookup: "查詢 DOI",
-    metadata: "Metadata",
-    metadataTitle: "Title:",
-    metadataAuthor: "Author:",
-    metadataYear: "Year:",
-    metadataJournal: "Journal:",
-    metadataDoi: "DOI:",
-    notAvailable: "N/A",
-    statusUpload: "請上傳 PDF。",
-    statusParsing: "正在解析 PDF 文字...",
-    statusNoDoi: "找不到 DOI，請手動輸入。",
-    statusInvalidDoi: "請先輸入有效 DOI。",
-    statusFetching: "正在查詢 Crossref...",
-    statusSuccess: "已取得 metadata，可下載新檔名 PDF。",
-    statusErrorLookup: "查詢 Crossref 失敗。",
-    statusErrorPdf: "處理 PDF 時發生錯誤。",
+    processAll: "全部處理",
+    downloadAll: "全部下載",
+    clear: "清除",
+    fileName: "檔名",
+    status: "狀態",
+    doi: "DOI",
+    resolvedFilename: "最終檔名",
+    actions: "操作",
+    process: "處理",
+    retry: "重試",
     download: "下載",
-    newFilename: "新檔名：",
-    toggleEn: "EN",
-    toggleZh: "中文",
+    remove: "移除",
+    noJobs: "尚未加入檔案。",
+    manualPlaceholder: "手動輸入 DOI",
+    invalidDoi: "無效 DOI",
+    noDoiFound: "找不到 DOI",
+    statusQueued: "排隊中",
+    statusExtracting: "擷取中",
+    statusDetecting: "偵測中",
+    statusFetching: "查詢中",
+    statusReady: "完成",
+    statusFailed: "失敗",
   },
 } satisfies Record<Lang, Record<string, string>>;
 
@@ -184,124 +204,256 @@ async function fetchCrossref(doi: string): Promise<CrossrefWork> {
 
 export default function Home() {
   const [lang, setLang] = useState<Lang>("en");
+  const [jobs, setJobs] = useState<PdfJob[]>([]);
+  const [isDragOver, setIsDragOver] = useState<boolean>(false);
   const t = TEXT[lang];
 
-  const [pdfFile, setPdfFile] = useState<File | null>(null);
-  const [allDois, setAllDois] = useState<string[]>([]);
-  const [selectedDoi, setSelectedDoi] = useState<string>("");
-  const [manualDoi, setManualDoi] = useState<string>("");
-  const [metadata, setMetadata] = useState<CrossrefWork | null>(null);
-  const [status, setStatus] = useState<string>(TEXT.en.statusUpload);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [isDragOver, setIsDragOver] = useState<boolean>(false);
+  const lookupDoi = async (doi: string) => fetchCrossref(doi);
 
-  const filename = useMemo(() => {
-    if (!metadata) return "";
-
-    const year = safeSegment(getYear(metadata), "UnknownYear");
-    const author = safeSegment(getFirstAuthor(metadata), "UnknownAuthor");
-    const shortTitle = safeSegment(getShortTitle(metadata), "Untitled");
-    const journalAbbr = safeSegment(getJournalAbbr(metadata), "UnknownJournal");
-    const base = `${year} - ${author} - ${shortTitle} - ${journalAbbr}`;
-    return `${truncate(base, MAX_FILENAME_LENGTH)}.pdf`;
-  }, [metadata]);
-
-  const lookupDoi = async (doi: string) => {
-    setSelectedDoi(doi);
-    setMetadata(null);
-    setLoading(true);
-    setStatus(t.statusFetching);
-
-    try {
-      const work = await fetchCrossref(doi);
-      setMetadata(work);
-      setStatus(t.statusSuccess);
-    } catch {
-      setStatus(t.statusErrorLookup);
-    } finally {
-      setLoading(false);
-    }
+  const getFallbackName = (fileName: string): string => {
+    const base = fileName.toLowerCase().endsWith(".pdf") ? fileName.slice(0, -4) : fileName;
+    const safeBase = safeSegment(base, "untitled");
+    return `${safeBase}.pdf`;
   };
 
-  const handleFile = async (file: File) => {
-    setPdfFile(file);
-    setMetadata(null);
-    setAllDois([]);
-    setSelectedDoi("");
-    setManualDoi("");
-    setLoading(true);
-    setStatus(t.statusParsing);
+  const withCollisionSuffix = (name: string, used: Set<string>): string => {
+    const dot = name.toLowerCase().endsWith(".pdf") ? name.length - 4 : -1;
+    const base = dot >= 0 ? name.slice(0, dot) : name;
+    const ext = dot >= 0 ? name.slice(dot) : ".pdf";
+
+    let candidate = `${base}${ext}`;
+    let index = 2;
+    while (used.has(candidate.toLowerCase())) {
+      candidate = `${base} (${index})${ext}`;
+      index += 1;
+    }
+
+    used.add(candidate.toLowerCase());
+    return candidate;
+  };
+
+  const computeCandidateName = (job: PdfJob): string => {
+    if (job.status === "ready" && job.metadata) {
+      const year = safeSegment(getYear(job.metadata), "UnknownYear");
+      const author = safeSegment(getFirstAuthor(job.metadata), "UnknownAuthor");
+      const shortTitle = safeSegment(getShortTitle(job.metadata), "Untitled");
+      const journalAbbr = safeSegment(getJournalAbbr(job.metadata), "UnknownJournal");
+      const base = `${year} - ${author} - ${shortTitle} - ${journalAbbr}`;
+      return `${truncate(base, MAX_FILENAME_LENGTH)}.pdf`;
+    }
+
+    return getFallbackName(job.file.name);
+  };
+
+  const resolveAllFilenames = (nextJobs: PdfJob[]): PdfJob[] => {
+    const used = new Set<string>();
+
+    return nextJobs.map((job) => {
+      const candidate = computeCandidateName(job);
+      const resolvedFilename = withCollisionSuffix(candidate, used);
+      return { ...job, resolvedFilename };
+    });
+  };
+
+  function updateJobs(mutator: (prev: PdfJob[]) => PdfJob[]) {
+    setJobs((prev) => resolveAllFilenames(mutator(prev)));
+  }
+
+  const getJob = (jobId: string): PdfJob | undefined => jobs.find((job) => job.id === jobId);
+
+  const processJob = async (jobId: string) => {
+    const startJob = getJob(jobId);
+    if (!startJob) return;
+
+    updateJobs((prev) =>
+      prev.map((job) =>
+        job.id === jobId
+          ? { ...job, status: "extracting", error: undefined, metadata: undefined }
+          : job,
+      ),
+    );
 
     try {
-      const text = await extractTextFromPdf(file);
-      const dois = findDois(text);
-      setAllDois(dois);
+      const current = getJob(jobId);
+      if (!current) return;
+      const text = await extractTextFromPdf(current.file);
 
-      if (dois.length === 0) {
-        setStatus(t.statusNoDoi);
-        setLoading(false);
+      updateJobs((prev) => prev.map((job) => (job.id === jobId ? { ...job, status: "detecting" } : job)));
+
+      const detected = findDois(text);
+
+      updateJobs((prev) =>
+        prev.map((job) =>
+          job.id === jobId
+            ? {
+                ...job,
+                dois: detected,
+                selectedDoi: job.selectedDoi ?? detected[0],
+              }
+            : job,
+        ),
+      );
+
+      if (detected.length === 0) {
+        updateJobs((prev) =>
+          prev.map((job) =>
+            job.id === jobId ? { ...job, status: "failed", error: "No DOI found", metadata: undefined } : job,
+          ),
+        );
         return;
       }
 
-      await lookupDoi(dois[0]);
+      const selected = getJob(jobId);
+      if (!selected) return;
+
+      let doiToLookup: string | undefined;
+      if ((selected.manualDoi ?? "").trim().length > 0) {
+        const cleaned = cleanDoi(selected.manualDoi!.trim());
+        if (!cleaned) {
+          updateJobs((prev) =>
+            prev.map((job) => (job.id === jobId ? { ...job, status: "failed", error: "Invalid DOI" } : job)),
+          );
+          return;
+        }
+        doiToLookup = cleaned;
+      } else if (selected.selectedDoi) {
+        doiToLookup = selected.selectedDoi;
+      } else {
+        updateJobs((prev) =>
+          prev.map((job) => (job.id === jobId ? { ...job, status: "failed", error: "No DOI found" } : job)),
+        );
+        return;
+      }
+
+      updateJobs((prev) => prev.map((job) => (job.id === jobId ? { ...job, status: "fetching" } : job)));
+
+      try {
+        const work = await lookupDoi(doiToLookup);
+        updateJobs((prev) =>
+          prev.map((job) =>
+            job.id === jobId
+              ? {
+                  ...job,
+                  metadata: work,
+                  selectedDoi: doiToLookup,
+                  status: "ready",
+                  error: undefined,
+                }
+              : job,
+          ),
+        );
+      } catch (error) {
+        updateJobs((prev) =>
+          prev.map((job) =>
+            job.id === jobId
+              ? {
+                  ...job,
+                  status: "failed",
+                  error: error instanceof Error ? error.message : "Crossref lookup failed",
+                  metadata: undefined,
+                }
+              : job,
+          ),
+        );
+      }
     } catch {
-      setStatus(t.statusErrorPdf);
-      setLoading(false);
+      updateJobs((prev) =>
+        prev.map((job) => (job.id === jobId ? { ...job, status: "failed", error: "Error processing PDF" } : job)),
+      );
     }
   };
 
-  const onUpload = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    await handleFile(file);
-  };
-
-  const onDrop = async (event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    setIsDragOver(false);
-
-    const file = event.dataTransfer.files?.[0];
-    if (!file) return;
-
-    const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-    if (!isPdf) {
-      setStatus(t.statusErrorPdf);
-      return;
+  const processAll = async () => {
+    const ids = jobs.map((j) => j.id);
+    for (const id of ids) {
+      await processJob(id);
     }
-
-    await handleFile(file);
   };
 
-  const onManualLookup = async () => {
-    const doi = cleanDoi(manualDoi);
-    if (!doi) {
-      setStatus(t.statusInvalidDoi);
-      return;
-    }
-    await lookupDoi(doi);
-  };
-
-  const onDownload = async () => {
-    if (!pdfFile || !filename) return;
-
-    const bytes = await pdfFile.arrayBuffer();
-    const blob = new Blob([bytes], { type: "application/pdf" });
+  const downloadJob = async (job: PdfJob) => {
+    const buf = await job.file.arrayBuffer();
+    const blob = new Blob([buf], { type: "application/pdf" });
     const url = URL.createObjectURL(blob);
+
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = filename;
+    anchor.download = job.resolvedFilename ?? getFallbackName(job.file.name);
+    document.body.appendChild(anchor);
     anchor.click();
-    URL.revokeObjectURL(url);
+
+    setTimeout(() => URL.revokeObjectURL(url), 100);
+    anchor.remove();
+  };
+
+  const downloadAll = async () => {
+    for (const job of jobs) {
+      await downloadJob(job);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  };
+
+  const appendFiles = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+
+    const items = Array.from(files).filter(
+      (file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"),
+    );
+
+    if (items.length === 0) return;
+
+    updateJobs((prev) => [
+      ...prev,
+      ...items.map((file) => ({
+        id: `${Date.now()}-${file.name}-${Math.random().toString(36).slice(2, 8)}`,
+        file,
+        status: "queued" as const,
+        dois: [],
+      })),
+    ]);
+  };
+
+  const onUpload = (event: ChangeEvent<HTMLInputElement>) => {
+    appendFiles(event.target.files);
+  };
+
+  const onDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragOver(false);
+    appendFiles(event.dataTransfer.files);
+  };
+
+  const allProcessed = useMemo(
+    () => jobs.length > 0 && jobs.every((job) => job.status === "ready" || job.status === "failed"),
+    [jobs],
+  );
+
+  const statusLabel = (status: JobStatus) => {
+    switch (status) {
+      case "queued":
+        return t.statusQueued;
+      case "extracting":
+        return t.statusExtracting;
+      case "detecting":
+        return t.statusDetecting;
+      case "fetching":
+        return t.statusFetching;
+      case "ready":
+        return t.statusReady;
+      case "failed":
+        return t.statusFailed;
+      default:
+        return status;
+    }
   };
 
   return (
     <main className="container">
       <div className="langToggle">
         <button type="button" onClick={() => setLang("en")} disabled={lang === "en"}>
-          {t.toggleEn}
+          EN
         </button>
         <button type="button" onClick={() => setLang("zh")} disabled={lang === "zh"}>
-          {t.toggleZh}
+          中文
         </button>
       </div>
 
@@ -318,74 +470,112 @@ export default function Home() {
           event.preventDefault();
           setIsDragOver(false);
         }}
-        onDrop={(event) => void onDrop(event)}
+        onDrop={onDrop}
       >
         <p>{t.dropHere}</p>
-        <label className="uploadButton" htmlFor="pdfUpload" aria-disabled={loading}>
+        <label className="uploadButton" htmlFor="pdfUpload">
           {t.upload}
         </label>
-        <input id="pdfUpload" type="file" accept="application/pdf" onChange={onUpload} disabled={loading} />
+        <input id="pdfUpload" type="file" accept="application/pdf" multiple onChange={onUpload} />
       </div>
 
-      {allDois.length > 1 && (
-        <div className="field">
-          <label htmlFor="doiSelect">{t.multiDoi}</label>
-          <select id="doiSelect" value={selectedDoi} onChange={(event) => void lookupDoi(event.target.value)}>
-            {allDois.map((doi) => (
-              <option key={doi} value={doi}>
-                {doi}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      <div className="field inline">
-        <input
-          type="text"
-          placeholder={t.manualPlaceholder}
-          value={manualDoi}
-          onChange={(event) => setManualDoi(event.target.value)}
-          disabled={loading}
-        />
-        <button type="button" onClick={() => void onManualLookup()} disabled={loading}>
-          {t.manualLookup}
+      <div className="field inline" style={{ marginBottom: 16 }}>
+        <button type="button" onClick={() => void processAll()} disabled={jobs.length === 0}>
+          {t.processAll}
+        </button>
+        <button type="button" onClick={() => void downloadAll()} disabled={!allProcessed}>
+          {t.downloadAll}
+        </button>
+        <button type="button" onClick={() => updateJobs(() => [])} disabled={jobs.length === 0}>
+          {t.clear}
         </button>
       </div>
 
-      {metadata && (
-        <section className="metadata">
-          <h2>{t.metadata}</h2>
-          <ul>
-            <li>
-              <strong>{t.metadataTitle}</strong> {metadata.title?.[0] ?? t.notAvailable}
-            </li>
-            <li>
-              <strong>{t.metadataAuthor}</strong> {metadata.author?.map((a) => a.family ?? a.name).join(", ") ?? t.notAvailable}
-            </li>
-            <li>
-              <strong>{t.metadataYear}</strong> {getYear(metadata)}
-            </li>
-            <li>
-              <strong>{t.metadataJournal}</strong> {metadata["container-title"]?.[0] ?? t.notAvailable}
-            </li>
-            <li>
-              <strong>{t.metadataDoi}</strong> {selectedDoi}
-            </li>
-          </ul>
-        </section>
-      )}
-
-      <p className="status">{status}</p>
-
-      <button type="button" onClick={() => void onDownload()} disabled={!filename || loading}>
-        {t.download}
-      </button>
-
-      {filename && (
-        <p className="filename">
-          {t.newFilename} {filename}
-        </p>
+      {jobs.length === 0 ? (
+        <p className="status">{t.noJobs}</p>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>{t.fileName}</th>
+                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>{t.status}</th>
+                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>{t.doi}</th>
+                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>{t.resolvedFilename}</th>
+                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>{t.actions}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {jobs.map((job) => (
+                <tr key={job.id}>
+                  <td style={{ verticalAlign: "top", padding: "8px 6px" }}>{job.file.name}</td>
+                  <td style={{ verticalAlign: "top", padding: "8px 6px" }}>
+                    {statusLabel(job.status)}
+                    {job.error ? <div style={{ color: "#b42318" }}>{job.error}</div> : null}
+                  </td>
+                  <td style={{ verticalAlign: "top", padding: "8px 6px", minWidth: 220 }}>
+                    {job.dois.length > 0 ? (
+                      <select
+                        value={job.selectedDoi ?? job.dois[0]}
+                        onChange={(event) =>
+                          updateJobs((prev) =>
+                            prev.map((item) =>
+                              item.id === job.id ? { ...item, selectedDoi: event.target.value } : item,
+                            ),
+                          )
+                        }
+                      >
+                        {job.dois.map((doi) => (
+                          <option key={doi} value={doi}>
+                            {doi}
+                          </option>
+                        ))}
+                      </select>
+                    ) : null}
+                    <input
+                      type="text"
+                      placeholder={t.manualPlaceholder}
+                      value={job.manualDoi ?? ""}
+                      onChange={(event) =>
+                        updateJobs((prev) =>
+                          prev.map((item) =>
+                            item.id === job.id ? { ...item, manualDoi: event.target.value } : item,
+                          ),
+                        )
+                      }
+                    />
+                  </td>
+                  <td style={{ verticalAlign: "top", padding: "8px 6px" }}>{job.resolvedFilename}</td>
+                  <td style={{ verticalAlign: "top", padding: "8px 6px" }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      <button type="button" onClick={() => void processJob(job.id)} disabled={job.status !== "queued"}>
+                        {t.process}
+                      </button>
+                      <button type="button" onClick={() => void processJob(job.id)} disabled={job.status !== "failed"}>
+                        {t.retry}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void downloadJob(job)}
+                        disabled={job.status !== "ready" && job.status !== "failed"}
+                      >
+                        {t.download}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateJobs((prev) => prev.filter((item) => item.id !== job.id))
+                        }
+                      >
+                        {t.remove}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </main>
   );
