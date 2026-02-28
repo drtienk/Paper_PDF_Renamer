@@ -142,23 +142,27 @@ const getFirstAuthor = (work: CrossrefWork): string => {
   return first.family ?? first.name ?? first.given ?? "UnknownAuthor";
 };
 
-// Topic/title: keep within 60 chars; if truncated, add "-"
 const getShortTitle = (work: CrossrefWork): string => {
   const title = sanitizeFilename(work.title?.[0] ?? "Untitled");
-  return title.length > MAX_SHORT_TITLE_LENGTH ? `${title.slice(0, MAX_SHORT_TITLE_LENGTH)}-` : title;
+  if (title.length <= MAX_SHORT_TITLE_LENGTH) {
+    return title;
+  }
+
+  return `${title.slice(0, MAX_SHORT_TITLE_LENGTH)}-`;
 };
 
-// Journal abbreviation: take first letters, ignoring stop words, uppercase
 const getJournalAbbr = (work: CrossrefWork): string => {
   const journal = sanitizeFilename(work["container-title"]?.[0] ?? "");
-  if (!journal) return "UnknownJournal";
+  if (!journal) {
+    return "UnknownJournal";
+  }
 
   const abbr = journal
     .split(/\s+/)
-    .map((w) => w.trim())
-    .filter(Boolean)
-    .filter((w) => !JOURNAL_STOP_WORDS.has(w.toLowerCase()))
-    .map((w) => (w[0] ? w[0].toUpperCase() : ""))
+    .map((word) => word.trim())
+    .filter((word) => word.length > 0)
+    .filter((word) => !JOURNAL_STOP_WORDS.has(word.toLowerCase()))
+    .map((word) => word[0]?.toUpperCase() ?? "")
     .join("");
 
   return truncate(abbr || "UnknownJournal", MAX_JOURNAL_ABBR_LENGTH);
