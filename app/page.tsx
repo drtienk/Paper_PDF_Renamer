@@ -281,35 +281,33 @@ export default function Home() {
 
       const detected = findDois(text);
 
-      const manualTrim = (start.manualDoi ?? "").trim();
-      const selected =
-        start.selectedDoi && start.selectedDoi.trim().length > 0
-          ? start.selectedDoi
-          : (detected[0] ?? "");
-      const doiToLookup = cleanDoi(manualTrim ? manualTrim : selected);
-      const manualHasInput = manualTrim.length > 0;
-      const manualInvalid = manualHasInput && doiToLookup.length === 0;
+      let doiToLookup = "";
+      let manualHasInput = false;
+      let manualInvalid = false;
 
       updateJobs((prev) =>
-        prev.map((job) =>
-          job.id === jobId
-            ? {
-                ...job,
-                dois: detected,
-                selectedDoi: selected,
-              }
-            : job,
-        ),
+        prev.map((job) => {
+          if (job.id !== jobId) return job;
+
+          const manualTrim = (job.manualDoi ?? "").trim();
+          manualHasInput = manualTrim.length > 0;
+          const selected =
+            job.selectedDoi && job.selectedDoi.trim().length > 0
+              ? job.selectedDoi
+              : (detected[0] ?? "");
+
+          doiToLookup = manualTrim ? cleanDoi(manualTrim) : selected;
+          manualInvalid = manualHasInput && doiToLookup.trim().length === 0;
+
+          return {
+            ...job,
+            dois: detected,
+            selectedDoi: selected,
+          };
+        }),
       );
 
-      if (manualInvalid) {
-        updateJobs((prev) =>
-          prev.map((job) => (job.id === jobId ? { ...job, status: "failed", error: "Invalid DOI" } : job)),
-        );
-        return;
-      }
-
-      if (detected.length === 0 && doiToLookup === "") {
+      if (detected.length === 0) {
         updateJobs((prev) =>
           prev.map((job) =>
             job.id === jobId ? { ...job, status: "failed", error: "No DOI found", metadata: undefined } : job,
@@ -321,6 +319,13 @@ export default function Home() {
       if (!doiToLookup || doiToLookup.trim().length === 0) {
         updateJobs((prev) =>
           prev.map((job) => (job.id === jobId ? { ...job, status: "failed", error: "No DOI found" } : job)),
+        );
+        return;
+      }
+
+      if (manualInvalid) {
+        updateJobs((prev) =>
+          prev.map((job) => (job.id === jobId ? { ...job, status: "failed", error: "Invalid DOI" } : job)),
         );
         return;
       }
