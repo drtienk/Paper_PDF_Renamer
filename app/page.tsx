@@ -434,146 +434,178 @@ export default function Home() {
     }
   };
 
-  return (
-    <main className="container">
-      <div className="langToggle">
-        <button type="button" onClick={() => setLang("en")} disabled={lang === "en"}>
-          EN
-        </button>
-        <button type="button" onClick={() => setLang("zh")} disabled={lang === "zh"}>
-          中文
-        </button>
-      </div>
+ 
+return (
+  <main className="container" style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+    <div className="langToggle">
+      <button type="button" onClick={() => setLang("en")} disabled={lang === "en"}>
+        EN
+      </button>
+      <button type="button" onClick={() => setLang("zh")} disabled={lang === "zh"}>
+        中文
+      </button>
+    </div>
 
-      <h1>{t.title}</h1>
-      <p className="subtitle">{t.subtitle}</p>
+    <h1>{t.title}</h1>
+    <p className="subtitle">{t.subtitle}</p>
 
-      <div
-        className={`dropZone${isDragOver ? " dragOver" : ""}`}
-        onDragOver={(event) => {
-          event.preventDefault();
-          setIsDragOver(true);
-        }}
-        onDragLeave={(event) => {
-          event.preventDefault();
-          setIsDragOver(false);
-        }}
-        onDrop={onDrop}
-      >
-        <p>{t.dropHere}</p>
-        <label className="uploadButton" htmlFor="pdfUpload">
-          {t.upload}
-        </label>
-        <input id="pdfUpload" type="file" accept="application/pdf" multiple onChange={onUpload} />
-      </div>
+    <div
+      className={`dropZone${isDragOver ? " dragOver" : ""}`}
+      onDragOver={(event) => {
+        event.preventDefault();
+        setIsDragOver(true);
+      }}
+      onDragLeave={(event) => {
+        event.preventDefault();
+        setIsDragOver(false);
+      }}
+      onDrop={onDrop}
+    >
+      <p>{t.dropHere}</p>
+      <label className="uploadButton" htmlFor="pdfUpload">
+        {t.upload}
+      </label>
+      <input id="pdfUpload" type="file" accept="application/pdf" multiple onChange={onUpload} />
+    </div>
 
-      <div className="field inline" style={{ marginBottom: 16 }}>
-        <button type="button" onClick={() => void processAll()} disabled={jobs.length === 0}>
-          {t.processAll}
-        </button>
-        <button type="button" onClick={() => void downloadAll()} disabled={!allProcessed}>
-          {t.downloadAll}
-        </button>
-        <button type="button" onClick={() => updateJobs(() => [])} disabled={jobs.length === 0}>
-          {t.clear}
-        </button>
-      </div>
+    <div className="field inline" style={{ marginBottom: 16 }}>
+      <button type="button" onClick={() => void processAll()} disabled={jobs.length === 0}>
+        {t.processAll}
+      </button>
+      <button type="button" onClick={() => void downloadAll()} disabled={!allProcessed}>
+        {t.downloadAll}
+      </button>
+      <button type="button" onClick={() => updateJobs(() => [])} disabled={jobs.length === 0}>
+        {t.clear}
+      </button>
+    </div>
 
-      {jobs.length === 0 ? (
-        <p className="status">{t.noJobs}</p>
-      ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
-            <thead>
-              <tr>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>
-                  {t.fileName}
-                </th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>
-                  {t.status}
-                </th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>
-                  {t.doi}
-                </th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>
-                  {t.resolvedFilename}
-                </th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>
-                  {t.actions}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {jobs.map((job) => (
-                <tr key={job.id}>
-                  <td style={{ verticalAlign: "top", padding: "8px 6px" }}>{job.file.name}</td>
-                  <td style={{ verticalAlign: "top", padding: "8px 6px" }}>
-                    {statusLabel(job.status)}
-                    {job.error ? <div style={{ color: "#b42318" }}>{job.error}</div> : null}
-                  </td>
-                  <td style={{ verticalAlign: "top", padding: "8px 6px", minWidth: 220 }}>
-                    {job.dois.length > 0 ? (
-                      <select
-                        value={job.selectedDoi ?? job.dois[0]}
-                        onChange={(event) =>
-                          updateJobs((prev) =>
-                            prev.map((item) =>
-                              item.id === job.id ? { ...item, selectedDoi: event.target.value } : item,
-                            ),
-                          )
-                        }
-                      >
-                        {job.dois.map((doi) => (
-                          <option key={doi} value={doi}>
-                            {doi}
-                          </option>
-                        ))}
-                      </select>
-                    ) : null}
-                    <input
-                      type="text"
-                      placeholder={t.manualPlaceholder}
-                      value={job.manualDoi ?? ""}
+    {jobs.length === 0 ? (
+      <p className="status">{t.noJobs}</p>
+    ) : (
+      <div style={{ overflowX: "auto", flex: 1 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+          <thead>
+            <tr>
+              <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>
+                {t.fileName}
+              </th>
+              <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>
+                {t.status}
+              </th>
+              <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>
+                {t.doi}
+              </th>
+              <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>
+                {t.resolvedFilename}
+              </th>
+              <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>
+                {t.actions}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {jobs.map((job) => (
+              <tr key={job.id}>
+                <td style={{ verticalAlign: "top", padding: "8px 6px" }}>{job.file.name}</td>
+                <td style={{ verticalAlign: "top", padding: "8px 6px" }}>
+                  {statusLabel(job.status)}
+                  {job.error ? <div style={{ color: "#b42318" }}>{job.error}</div> : null}
+                </td>
+                <td style={{ verticalAlign: "top", padding: "8px 6px", minWidth: 220 }}>
+                  {job.dois.length > 0 ? (
+                    <select
+                      value={job.selectedDoi ?? job.dois[0]}
                       onChange={(event) =>
                         updateJobs((prev) =>
                           prev.map((item) =>
-                            item.id === job.id ? { ...item, manualDoi: event.target.value } : item,
+                            item.id === job.id ? { ...item, selectedDoi: event.target.value } : item,
                           ),
                         )
                       }
-                    />
-                  </td>
-                  <td style={{ verticalAlign: "top", padding: "8px 6px" }}>{job.resolvedFilename}</td>
-                  <td style={{ verticalAlign: "top", padding: "8px 6px" }}>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                      <button type="button" onClick={() => void processJob(job.id)} disabled={job.status !== "queued"}>
-                        {t.process}
-                      </button>
-                      <button type="button" onClick={() => void processJob(job.id)} disabled={job.status !== "failed"}>
-                        {t.retry}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void downloadJob(job)}
-                        disabled={job.status !== "ready" && job.status !== "failed"}
-                      >
-                        {t.download}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => updateJobs((prev) => prev.filter((item) => item.id !== job.id))}
-                      >
-                        {t.remove}
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                    >
+                      {job.dois.map((doi) => (
+                        <option key={doi} value={doi}>
+                          {doi}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
+                  <input
+                    type="text"
+                    placeholder={t.manualPlaceholder}
+                    value={job.manualDoi ?? ""}
+                    onChange={(event) =>
+                      updateJobs((prev) =>
+                        prev.map((item) =>
+                          item.id === job.id ? { ...item, manualDoi: event.target.value } : item,
+                        ),
+                      )
+                    }
+                  />
+                </td>
+                <td style={{ verticalAlign: "top", padding: "8px 6px" }}>{job.resolvedFilename}</td>
+                <td style={{ verticalAlign: "top", padding: "8px 6px" }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    <button type="button" onClick={() => void processJob(job.id)} disabled={job.status !== "queued"}>
+                      {t.process}
+                    </button>
+                    <button type="button" onClick={() => void processJob(job.id)} disabled={job.status !== "failed"}>
+                      {t.retry}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void downloadJob(job)}
+                      disabled={job.status !== "ready" && job.status !== "failed"}
+                    >
+                      {t.download}
+                    </button>
+                    <button type="button" onClick={() => updateJobs((prev) => prev.filter((item) => item.id !== job.id))}>
+                      {t.remove}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )}
+
+    <footer
+      style={{
+        marginTop: 32,
+        paddingTop: 16,
+        borderTop: "1px solid #e5e7eb",
+        fontSize: 12,
+        opacity: 0.8,
+        textAlign: "center",
+      }}
+    >
+      {lang === "zh" ? (
+        <>
+          <div>作者：Keng Ming (Terence) Tien</div>
+          <div>
+            有問題請寄信：
+            <a href="mailto:tienkusa@gmail.com" style={{ marginLeft: 6, textDecoration: "underline" }}>
+              tienkusa@gmail.com
+            </a>
+          </div>
+        </>
+      ) : (
+        <>
+          <div>Created by Keng Ming (Terence) Tien</div>
+          <div>
+            Questions? Email
+            <a href="mailto:tienkusa@gmail.com" style={{ marginLeft: 6, textDecoration: "underline" }}>
+              tienkusa@gmail.com
+            </a>
+          </div>
+        </>
       )}
-    </main>
-  );
-}
+    </footer>
+  </main>
+);
+ 
+
 
