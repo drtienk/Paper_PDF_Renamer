@@ -1,6 +1,7 @@
+
 "use client";
 
-import { ChangeEvent, DragEvent, useMemo, useState } from "react";
+import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 
 type CrossrefAuthor = {
@@ -19,13 +20,7 @@ type CrossrefWork = {
 
 type Lang = "en" | "zh";
 
-type JobStatus =
-  | "queued"
-  | "extracting"
-  | "detecting"
-  | "fetching"
-  | "ready"
-  | "failed";
+type JobStatus = "queued" | "extracting" | "detecting" | "fetching" | "ready" | "failed";
 
 type PdfJob = {
   id: string;
@@ -164,18 +159,13 @@ const getFirstAuthor = (work: CrossrefWork): string => {
 
 const getShortTitle = (work: CrossrefWork): string => {
   const title = sanitizeFilename(work.title?.[0] ?? "Untitled");
-  if (title.length <= MAX_SHORT_TITLE_LENGTH) {
-    return title;
-  }
-
+  if (title.length <= MAX_SHORT_TITLE_LENGTH) return title;
   return `${title.slice(0, MAX_SHORT_TITLE_LENGTH)}-`;
 };
 
 const getJournalAbbr = (work: CrossrefWork): string => {
   const journal = sanitizeFilename(work["container-title"]?.[0] ?? "");
-  if (!journal) {
-    return "UnknownJournal";
-  }
+  if (!journal) return "UnknownJournal";
 
   const abbr = journal
     .split(/\s+/)
@@ -190,14 +180,10 @@ const getJournalAbbr = (work: CrossrefWork): string => {
 
 async function fetchCrossref(doi: string): Promise<CrossrefWork> {
   const response = await fetch(`https://api.crossref.org/works/${encodeURIComponent(doi)}`);
-  if (!response.ok) {
-    throw new Error(`Crossref request failed (${response.status})`);
-  }
+  if (!response.ok) throw new Error(`Crossref request failed (${response.status})`);
 
   const payload = (await response.json()) as { message?: CrossrefWork };
-  if (!payload.message) {
-    throw new Error("Crossref response missing metadata");
-  }
+  if (!payload.message) throw new Error("Crossref response missing metadata");
 
   return payload.message;
 }
@@ -205,8 +191,13 @@ async function fetchCrossref(doi: string): Promise<CrossrefWork> {
 export default function Home() {
   const [lang, setLang] = useState<Lang>("en");
   const [jobs, setJobs] = useState<PdfJob[]>([]);
+  const jobsRef = useRef<PdfJob[]>([]);
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
   const t = TEXT[lang];
+
+  useEffect(() => {
+    jobsRef.current = jobs;
+  }, [jobs]);
 
   const lookupDoi = async (doi: string) => fetchCrossref(doi);
 
@@ -241,13 +232,11 @@ export default function Home() {
       const base = `${year} - ${author} - ${shortTitle} - ${journalAbbr}`;
       return `${truncate(base, MAX_FILENAME_LENGTH)}.pdf`;
     }
-
     return getFallbackName(job.file.name);
   };
 
   const resolveAllFilenames = (nextJobs: PdfJob[]): PdfJob[] => {
     const used = new Set<string>();
-
     return nextJobs.map((job) => {
       const candidate = computeCandidateName(job);
       const resolvedFilename = withCollisionSuffix(candidate, used);
@@ -259,58 +248,59 @@ export default function Home() {
     setJobs((prev) => resolveAllFilenames(mutator(prev)));
   }
 
-  const getJob = (jobId: string): PdfJob | undefined => jobs.find((job) => job.id === jobId);
+  const getJobLatest = (jobId: string): PdfJob | undefined =>
+    jobsRef.current.find((job) => job.id === jobId);
 
   const processJob = async (jobId: string) => {
-    const start = getJob(jobId);
+    const start = getJobLatest(jobId);
     if (!start) return;
+
     const file = start.file;
+    const manualTrim = (start.manualDoi ?? "").trim();
+    const selectedTrim = (start.selectedDoi ?? "").trim();
 
     updateJobs((prev) =>
       prev.map((job) =>
-        job.id === jobId
-          ? { ...job, status: "extracting", error: undefined, metadata: undefined }
-          : job,
+        job.id === jobId ? { ...job, status: "extracting", error: undefined, metadata: undefined } : job,
       ),
     );
 
     try {
       const text = await extractTextFromPdf(file);
 
-      updateJobs((prev) => prev.map((job) => (job.id === jobId ? { ...job, status: "detecting" } : job)));
+      updateJobs((prev) =>
+        prev.map((job) => (job.id === jobId ? { ...job, status: "detecting" } : job)),
+      );
 
       const detected = findDois(text);
 
-      let doiToLookup = "";
-      let manualHasInput = false;
-      let manualInvalid = false;
+      const selectedCandidate =
+        selectedTrim.length > 0 ? selectedTrim : (detected[0] ?? "");
 
+      const doiToLookup = manualTrim.length > 0 ? cleanDoi(manualTrim) : selectedCandidate;
+
+      // Always persist detection results (so dropdown shows what we found)
       updateJobs((prev) =>
-        prev.map((job) => {
-          if (job.id !== jobId) return job;
-
-          const manualTrim = (job.manualDoi ?? "").trim();
-          manualHasInput = manualTrim.length > 0;
-          const selected =
-            job.selectedDoi && job.selectedDoi.trim().length > 0
-              ? job.selectedDoi
-              : (detected[0] ?? "");
-
-          doiToLookup = manualTrim ? cleanDoi(manualTrim) : selected;
-          manualInvalid = manualHasInput && doiToLookup.trim().length === 0;
-
-          return {
-            ...job,
-            dois: detected,
-            selectedDoi: selected,
-          };
-        }),
+        prev.map((job) =>
+          job.id === jobId
+            ? { ...job, dois: detected, selectedDoi: selectedCandidate || job.selectedDoi }
+            : job,
+        ),
       );
 
-      if (detected.length === 0) {
+      if (detected.length === 0 && manualTrim.length === 0) {
         updateJobs((prev) =>
           prev.map((job) =>
-            job.id === jobId ? { ...job, status: "failed", error: "No DOI found", metadata: undefined } : job,
+            job.id === jobId ? { ...job, status: "failed", error: t.noDoiFound, metadata: undefined } : job,
+          ),
+        );
+        return;
+      }
+
+      if (manualTrim.length > 0 && (!doiToLookup || doiToLookup.trim().length === 0)) {
+        updateJobs((prev) =>
+          prev.map((job) =>
+            job.id === jobId ? { ...job, status: "failed", error: t.invalidDoi, metadata: undefined } : job,
           ),
         );
         return;
@@ -318,32 +308,23 @@ export default function Home() {
 
       if (!doiToLookup || doiToLookup.trim().length === 0) {
         updateJobs((prev) =>
-          prev.map((job) => (job.id === jobId ? { ...job, status: "failed", error: "No DOI found" } : job)),
+          prev.map((job) =>
+            job.id === jobId ? { ...job, status: "failed", error: t.noDoiFound, metadata: undefined } : job,
+          ),
         );
         return;
       }
 
-      if (manualInvalid) {
-        updateJobs((prev) =>
-          prev.map((job) => (job.id === jobId ? { ...job, status: "failed", error: "Invalid DOI" } : job)),
-        );
-        return;
-      }
-
-      updateJobs((prev) => prev.map((job) => (job.id === jobId ? { ...job, status: "fetching" } : job)));
+      updateJobs((prev) =>
+        prev.map((job) => (job.id === jobId ? { ...job, status: "fetching" } : job)),
+      );
 
       try {
         const work = await lookupDoi(doiToLookup);
         updateJobs((prev) =>
           prev.map((job) =>
             job.id === jobId
-              ? {
-                  ...job,
-                  metadata: work,
-                  selectedDoi: doiToLookup,
-                  status: "ready",
-                  error: undefined,
-                }
+              ? { ...job, metadata: work, selectedDoi: doiToLookup, status: "ready", error: undefined }
               : job,
           ),
         );
@@ -363,14 +344,17 @@ export default function Home() {
       }
     } catch {
       updateJobs((prev) =>
-        prev.map((job) => (job.id === jobId ? { ...job, status: "failed", error: "Error processing PDF" } : job)),
+        prev.map((job) =>
+          job.id === jobId ? { ...job, status: "failed", error: "Error processing PDF" } : job,
+        ),
       );
     }
   };
 
   const processAll = async () => {
-    const ids = jobs.map((j) => j.id);
+    const ids = jobsRef.current.map((j) => j.id);
     for (const id of ids) {
+      // sequential, no parallel
       await processJob(id);
     }
   };
@@ -391,7 +375,7 @@ export default function Home() {
   };
 
   const downloadAll = async () => {
-    for (const job of jobs) {
+    for (const job of jobsRef.current) {
       await downloadJob(job);
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
@@ -403,7 +387,6 @@ export default function Home() {
     const items = Array.from(files).filter(
       (file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"),
     );
-
     if (items.length === 0) return;
 
     updateJobs((prev) => [
@@ -451,137 +434,178 @@ export default function Home() {
     }
   };
 
-  return (
-    <main className="container">
-      <div className="langToggle">
-        <button type="button" onClick={() => setLang("en")} disabled={lang === "en"}>
-          EN
-        </button>
-        <button type="button" onClick={() => setLang("zh")} disabled={lang === "zh"}>
-          中文
-        </button>
-      </div>
+ 
+return (
+  <main className="container" style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+    <div className="langToggle">
+      <button type="button" onClick={() => setLang("en")} disabled={lang === "en"}>
+        EN
+      </button>
+      <button type="button" onClick={() => setLang("zh")} disabled={lang === "zh"}>
+        中文
+      </button>
+    </div>
 
-      <h1>{t.title}</h1>
-      <p className="subtitle">{t.subtitle}</p>
+    <h1>{t.title}</h1>
+    <p className="subtitle">{t.subtitle}</p>
 
-      <div
-        className={`dropZone${isDragOver ? " dragOver" : ""}`}
-        onDragOver={(event) => {
-          event.preventDefault();
-          setIsDragOver(true);
-        }}
-        onDragLeave={(event) => {
-          event.preventDefault();
-          setIsDragOver(false);
-        }}
-        onDrop={onDrop}
-      >
-        <p>{t.dropHere}</p>
-        <label className="uploadButton" htmlFor="pdfUpload">
-          {t.upload}
-        </label>
-        <input id="pdfUpload" type="file" accept="application/pdf" multiple onChange={onUpload} />
-      </div>
+    <div
+      className={`dropZone${isDragOver ? " dragOver" : ""}`}
+      onDragOver={(event) => {
+        event.preventDefault();
+        setIsDragOver(true);
+      }}
+      onDragLeave={(event) => {
+        event.preventDefault();
+        setIsDragOver(false);
+      }}
+      onDrop={onDrop}
+    >
+      <p>{t.dropHere}</p>
+      <label className="uploadButton" htmlFor="pdfUpload">
+        {t.upload}
+      </label>
+      <input id="pdfUpload" type="file" accept="application/pdf" multiple onChange={onUpload} />
+    </div>
 
-      <div className="field inline" style={{ marginBottom: 16 }}>
-        <button type="button" onClick={() => void processAll()} disabled={jobs.length === 0}>
-          {t.processAll}
-        </button>
-        <button type="button" onClick={() => void downloadAll()} disabled={!allProcessed}>
-          {t.downloadAll}
-        </button>
-        <button type="button" onClick={() => updateJobs(() => [])} disabled={jobs.length === 0}>
-          {t.clear}
-        </button>
-      </div>
+    <div className="field inline" style={{ marginBottom: 16 }}>
+      <button type="button" onClick={() => void processAll()} disabled={jobs.length === 0}>
+        {t.processAll}
+      </button>
+      <button type="button" onClick={() => void downloadAll()} disabled={!allProcessed}>
+        {t.downloadAll}
+      </button>
+      <button type="button" onClick={() => updateJobs(() => [])} disabled={jobs.length === 0}>
+        {t.clear}
+      </button>
+    </div>
 
-      {jobs.length === 0 ? (
-        <p className="status">{t.noJobs}</p>
-      ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
-            <thead>
-              <tr>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>{t.fileName}</th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>{t.status}</th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>{t.doi}</th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>{t.resolvedFilename}</th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>{t.actions}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {jobs.map((job) => (
-                <tr key={job.id}>
-                  <td style={{ verticalAlign: "top", padding: "8px 6px" }}>{job.file.name}</td>
-                  <td style={{ verticalAlign: "top", padding: "8px 6px" }}>
-                    {statusLabel(job.status)}
-                    {job.error ? <div style={{ color: "#b42318" }}>{job.error}</div> : null}
-                  </td>
-                  <td style={{ verticalAlign: "top", padding: "8px 6px", minWidth: 220 }}>
-                    {job.dois.length > 0 ? (
-                      <select
-                        value={job.selectedDoi ?? job.dois[0]}
-                        onChange={(event) =>
-                          updateJobs((prev) =>
-                            prev.map((item) =>
-                              item.id === job.id ? { ...item, selectedDoi: event.target.value } : item,
-                            ),
-                          )
-                        }
-                      >
-                        {job.dois.map((doi) => (
-                          <option key={doi} value={doi}>
-                            {doi}
-                          </option>
-                        ))}
-                      </select>
-                    ) : null}
-                    <input
-                      type="text"
-                      placeholder={t.manualPlaceholder}
-                      value={job.manualDoi ?? ""}
+    {jobs.length === 0 ? (
+      <p className="status">{t.noJobs}</p>
+    ) : (
+      <div style={{ overflowX: "auto", flex: 1 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+          <thead>
+            <tr>
+              <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>
+                {t.fileName}
+              </th>
+              <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>
+                {t.status}
+              </th>
+              <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>
+                {t.doi}
+              </th>
+              <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>
+                {t.resolvedFilename}
+              </th>
+              <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "8px 6px" }}>
+                {t.actions}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {jobs.map((job) => (
+              <tr key={job.id}>
+                <td style={{ verticalAlign: "top", padding: "8px 6px" }}>{job.file.name}</td>
+                <td style={{ verticalAlign: "top", padding: "8px 6px" }}>
+                  {statusLabel(job.status)}
+                  {job.error ? <div style={{ color: "#b42318" }}>{job.error}</div> : null}
+                </td>
+                <td style={{ verticalAlign: "top", padding: "8px 6px", minWidth: 220 }}>
+                  {job.dois.length > 0 ? (
+                    <select
+                      value={job.selectedDoi ?? job.dois[0]}
                       onChange={(event) =>
                         updateJobs((prev) =>
                           prev.map((item) =>
-                            item.id === job.id ? { ...item, manualDoi: event.target.value } : item,
+                            item.id === job.id ? { ...item, selectedDoi: event.target.value } : item,
                           ),
                         )
                       }
-                    />
-                  </td>
-                  <td style={{ verticalAlign: "top", padding: "8px 6px" }}>{job.resolvedFilename}</td>
-                  <td style={{ verticalAlign: "top", padding: "8px 6px" }}>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                      <button type="button" onClick={() => void processJob(job.id)} disabled={job.status !== "queued"}>
-                        {t.process}
-                      </button>
-                      <button type="button" onClick={() => void processJob(job.id)} disabled={job.status !== "failed"}>
-                        {t.retry}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void downloadJob(job)}
-                        disabled={job.status !== "ready" && job.status !== "failed"}
-                      >
-                        {t.download}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          updateJobs((prev) => prev.filter((item) => item.id !== job.id))
-                        }
-                      >
-                        {t.remove}
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                    >
+                      {job.dois.map((doi) => (
+                        <option key={doi} value={doi}>
+                          {doi}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
+                  <input
+                    type="text"
+                    placeholder={t.manualPlaceholder}
+                    value={job.manualDoi ?? ""}
+                    onChange={(event) =>
+                      updateJobs((prev) =>
+                        prev.map((item) =>
+                          item.id === job.id ? { ...item, manualDoi: event.target.value } : item,
+                        ),
+                      )
+                    }
+                  />
+                </td>
+                <td style={{ verticalAlign: "top", padding: "8px 6px" }}>{job.resolvedFilename}</td>
+                <td style={{ verticalAlign: "top", padding: "8px 6px" }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    <button type="button" onClick={() => void processJob(job.id)} disabled={job.status !== "queued"}>
+                      {t.process}
+                    </button>
+                    <button type="button" onClick={() => void processJob(job.id)} disabled={job.status !== "failed"}>
+                      {t.retry}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void downloadJob(job)}
+                      disabled={job.status !== "ready" && job.status !== "failed"}
+                    >
+                      {t.download}
+                    </button>
+                    <button type="button" onClick={() => updateJobs((prev) => prev.filter((item) => item.id !== job.id))}>
+                      {t.remove}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )}
+
+    <footer
+      style={{
+        marginTop: 32,
+        paddingTop: 16,
+        borderTop: "1px solid #e5e7eb",
+        fontSize: 12,
+        opacity: 0.8,
+        textAlign: "center",
+      }}
+    >
+      {lang === "zh" ? (
+        <>
+          <div>作者：Keng Ming (Terence) Tien</div>
+          <div>
+            有問題請寄信：
+            <a href="mailto:tienkusa@gmail.com" style={{ marginLeft: 6, textDecoration: "underline" }}>
+              tienkusa@gmail.com
+            </a>
+          </div>
+        </>
+      ) : (
+        <>
+          <div>Created by Keng Ming (Terence) Tien</div>
+          <div>
+            Questions? Email
+            <a href="mailto:tienkusa@gmail.com" style={{ marginLeft: 6, textDecoration: "underline" }}>
+              tienkusa@gmail.com
+            </a>
+          </div>
+        </>
       )}
-    </main>
-  );
-}
+    </footer>
+  </main>
+);
+ }
+
+
